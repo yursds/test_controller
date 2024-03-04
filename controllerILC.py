@@ -4,6 +4,12 @@ from tensordict     import TensorDict
 SCALE_Q = 1
 SCALE_L = 0.7
 
+
+# ============================================================== #
+# TO DO
+# define a Q and L to satisfy error convergence to zero.
+# ============================================================== #
+
 class controllerILC():
     """ 
     This class implements a model free ILC action ONLY for square MIMO.

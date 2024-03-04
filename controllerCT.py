@@ -10,8 +10,7 @@ class controllerCT():
         """ Args:
                 dim_u (int): dimension of input vector (single step).
                 dim_e (int): dimention of error vector (single step).
-                Q (torch.Tensor[optional]): Q-filter matrix (square matrix)
-                L (torch.Tensor[optional]): learning gain matrix (square matrix) """
+        """
 
         # check
             
@@ -49,39 +48,23 @@ if __name__ == '__main__':
     # ILC controller instance
     conILC = controllerCT(dimU=dimU,dimE=dimE,dimSamples=samples)     
    
-    # initialization of ILC memory
-    conILC.newEp()                              # start new episode
-    for k in range(samples):
-    
-        # controller do nothing and save error as reference
-        conILC.firstEpLazy(ref[:, k:k+1])
-    
-    mem = conILC.getMemory()                      # get memory
-
     # start ILC iteration   
     for _ in range(episodes):
         
-        conILC.newEp()                          # start new episode
         conILC.stepILC()                        # update control
         
         for k in range(samples):
             
             new_u = conILC.getControl()         # get ILC control
-            conILC.updateMemInput(new_u)        # save total u for next episode
             
             out = new_u/2                       # simulate robot (simple function)
             
             new_e = ref[:, k:k+1]-out           # get new error
-            conILC.updateMemError(new_e)        # save new_error
-            
-            mem = conILC.getMemory()
             
     from matplotlib import pyplot as plt
 
     last_err = []
-    for td in mem:
-        err = td["error"]
-        last_err.append(err[:, -1])
+    
     
     plt.ion()
 
