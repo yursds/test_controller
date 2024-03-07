@@ -7,6 +7,9 @@ import numpy as np
 from example_robot_data import load
 from pinocchio.visualize import MeshcatVisualizer
 
+import time
+
+
 # get panda robot usinf example_robot_data
 robot:robWrap = load('double_pendulum')
 
@@ -55,10 +58,8 @@ while True:
         # end-effector pose
         Xee = data.oMf[robot.model.getFrameId(robot.model.frames[-1].name)]
 
-        # calculate the polytope
-        opt = {'calculate_faces':True}
-
         # visualise the robot
         viz.display(q)
+        time.sleep(0.1)
 
         
