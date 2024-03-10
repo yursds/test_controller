@@ -17,7 +17,7 @@ dq_min = -dq_max
 # Use robot configuration.
 q = (q_min+q_max)/2
 
-while True:
+while True==False:
     # some sinusoidal motion
     for i in torch.sin(torch.linspace(-torch.pi,torch.pi,200)):
 
@@ -37,4 +37,4 @@ while True:
         # end-effector pose
         Xee = data.oMf[robot.model.getFrameId(robot.model.frames[-1].name)]
 
-        
+
