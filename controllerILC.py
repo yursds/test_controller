@@ -2,7 +2,7 @@ import torch
 from tensordict     import TensorDict
 
 SCALE_Q = 1
-SCALE_L = 0.7
+SCALE_L = 0.5
 
 
 # ============================================================== #
@@ -10,7 +10,7 @@ SCALE_L = 0.7
 # define a Q and L to satisfy error convergence to zero.
 # ============================================================== #
 
-class controllerILC():
+class ctrlILC():
     """ 
     This class implements a model free ILC action ONLY for square MIMO.
     """
@@ -29,35 +29,35 @@ class controllerILC():
         if dimU != dimE:
             raise TypeError("ILC class implemented only for square MIMO.")      
         
-        self.uEp    = torch.zeros(dimU,dimSamples) # control inputs for next episode
-        self.uk     = torch.zeros(dimU,1)          # last control input
-        self.ek     = torch.zeros(dimE,1)          # last error
-        self.idx    = 0                            # idx step
-        self.mem    = []                           # list of episode's memory
+        self.uEp    = torch.zeros(dimU,dimSamples).type(torch.float64) # control inputs for current episode
+        self.uk     = torch.zeros(dimU,1).type(torch.float64)          # current control input
+        self.ek     = torch.zeros(dimE,1).type(torch.float64)          # current error
+        self.idx    = 0                                                # idx step
+        self.mem    = []                                                # list of episode's memory
         
-        # Init optionals variables # ADD Q depth check
+        # Init optionals variables # ADD Q depth check or expand it
         if Q is not None:
             if not isinstance(Q, torch.Tensor):
                 raise TypeError("Q must be a torch.Tensor")
             rows, cols = Q.size()
             if rows != cols:
                 raise ValueError("Q must be a square matrix")
-            self.Q:torch.Tensor = Q
+            self.Q:torch.Tensor = Q.type(torch.float64)
         else:
             #self.Q = (torch.tril(torch.ones(dimSamples,dimSamples))*SCALE_Q).expand(dimU, -1, -1)
-            self.Q = (torch.eye(dimSamples)*SCALE_Q).expand(dimU, -1, -1)
+            self.Q = (torch.eye(dimSamples)*SCALE_Q).expand(dimU, -1, -1).type(torch.float64)
         if L is not None:
             if not isinstance(L, torch.Tensor):
                     raise TypeError("L must be a torch.Tensor")
             rows, cols = L.size()
             if rows != cols:
                 raise ValueError("L must be a square matrix")
-            self.L:torch.Tensor = L
+            self.L:torch.Tensor = L.type(torch.float64)
         else:
-            self.L = (torch.tril(torch.ones(dimSamples,dimSamples))*SCALE_L).expand(dimE, -1, -1)
-            #self.L = (torch.eye(dimSamples)*SCALE_L).expand(dimE, -1, -1)
+            #self.L = (torch.tril(torch.ones(dimSamples,dimSamples))*SCALE_L).expand(dimE, -1, -1).type(torch.float64)
+            self.L = (torch.eye(dimSamples)*SCALE_L).expand(dimU, -1, -1).type(torch.float64)
         
-        # data memory template (of error and input) 
+        # data memory template (of error and input) stacked in column
         self.__tmplMem = TensorDict(
             {
             'error': torch.Tensor(), 
@@ -68,12 +68,15 @@ class controllerILC():
         
     def __updateMem__(self, data:torch.Tensor, dict:str) -> None:
         """
-        Store new data in a tensordict in a list.
+        Store new data in a tensordict in a list. Stacked in column.
         """
-        
+        if not isinstance(data, torch.Tensor):
+            raise TypeError("data must be a torch.Tensor")
+        if data.size()[1] != 1:
+            raise ("data must be a column vector")
         # use newest tensordict
         tmp_mem:torch.Tensor = self.mem[-1][dict]
-        tmp_mem = torch.cat([tmp_mem.clone(),data],dim=1)      # stack in column
+        tmp_mem = torch.cat([tmp_mem.clone(),data.type(torch.float64)],dim=1)      # stack in column
         # update mem
         self.mem[-1][dict] = tmp_mem
            
@@ -88,6 +91,7 @@ class controllerILC():
         """
         Store new input in a tensordict in a list.
         """
+        
         dict:str='input'
         self.__updateMem__(u_new, dict)
    
@@ -101,11 +105,11 @@ class controllerILC():
            
     def updateQ(self, newQ:torch.Tensor) -> None:
         """ Update Q tensor """
-        self.Q = newQ
+        self.Q = newQ(torch.float64)
     
     def updateL(self, newL:torch.Tensor) -> None:
         """ Update L tensor """
-        self.L = newL
+        self.L = newL.type(torch.float64)
 
     def stepILC(self) -> None:
         """
@@ -139,11 +143,12 @@ class controllerILC():
         self.idx = 0
         self.mem = []
 
-    def getMemory(self) -> torch.Tensor:
+    def getMemory(self) -> list:
+        """ Return list of dict of error and input stacked in column. """
         return self.mem
 
     def getControl(self) -> torch.Tensor:
-        
+        """ Return input of current step. """
         k = self.idx
         self.uk = self.uEp[:,k:k+1]
         self.idx += 1
@@ -151,7 +156,10 @@ class controllerILC():
         return self.uk
                  
     def firstEpLazy(self, ref:torch.Tensor) -> None:
-        """ no input and save error as reference"""
+        """ 
+        Init step 0 of ILC: no input and save  reference as error. 
+        Reference is stacked in rows.
+        """
         self.updateMemError(ref)
         self.updateMemInput(self.uk)
          
@@ -169,7 +177,7 @@ if __name__ == '__main__':
         ref[h,:] = ref[h,:]*(h+1)
     
     # ILC controller instance
-    conILC = controllerILC(dimU=dimU,dimE=dimE,dimSamples=samples)     
+    conILC = ctrlILC(dimU=dimU,dimE=dimE,dimSamples=samples)     
    
     # initialization of ILC memory
     conILC.newEp()                              # start new episode
@@ -202,12 +210,11 @@ if __name__ == '__main__':
     last_err = []
     for td in mem:
         err = td["error"]
-        last_err.append(err[:, -1])
+        last_err.append(err[:, -5])
     
     plt.ion()
 
     plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
     plt.plot(last_err)
     plt.title("error")
     plt.xlabel("iteration")
