@@ -25,7 +25,6 @@ DT = 0.05
 
 class PinDoublePendulumEnv(gym.Env):
 
-
     def __init__(self, rob_str:str, render_bool:bool = False, dt:float=0.05):
         """
         Args:
