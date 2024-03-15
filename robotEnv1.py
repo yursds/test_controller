@@ -213,6 +213,9 @@ class PinDoublePendulumEnv(gym.Env):
             self.viz.delete()
             self.isopen = False
 
+
+
+
 def angle_normalize(x:np.ndarray):
     return ((x + np.pi) % (2 * np.pi)) - np.pi
 

@@ -57,7 +57,7 @@ class ctrlILC():
             self.L:torch.Tensor = L.type(torch.float64)
         else:
             #self.L = (torch.tril(torch.ones(dimSamples,dimSamples))*SCALE_L).expand(dimE, -1, -1).type(torch.float64)
-            self.L = (torch.eye(dimSamples)*0.001).expand(dimU, -1, -1).type(torch.float64)
+            self.L = (torch.eye(dimSamples)*0.51).expand(dimU, -1, -1).type(torch.float64)
         
         # data memory template (of error and input) stacked in column
         self.__tmplMem = TensorDict(
@@ -219,7 +219,7 @@ if __name__ == '__main__':
     plt.figure(figsize=(10, 5))
     plt.plot(last_err)
     plt.title("error")
-    plt.xlabel("iteration")
+    plt.xlabel("episode (step k=5)")
     plt.grid()
     
     print('Complete')

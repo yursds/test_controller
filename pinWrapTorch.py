@@ -4,12 +4,26 @@ import subprocess
 from pinocchio.robot_wrapper    import RobotWrapper as robWrap
 from pinocchio.visualize        import MeshcatVisualizer
 from example_robot_data         import load
-
+import time
 
 class robPin():
 
     def __init__(self, robot:robWrap, dtype:torch.dtype=torch.float64, visual:bool=False, dt:float=0.01) -> None:
+        """
+        Class that wrap pinocchio library with torch library. Only main methods are implemented.
+        
+        Args:
+            robot (robWrap): class to import robot using URDF in pinocchio
+            dtype (torch.dtype, optional): type of variables in class. Defaults to torch.float64.
+            visual (bool, optional): to visualize robot with meshcat. Defaults to False.
+            dt (float, optional): time sample [s] for integration and visualization. Defaults to 0.01 [s].
+        
+        NOTE: For particular method and some examples see: 
+            https://docs.ros.org/en/melodic/api/pinocchio/html/namespacepinocchio.html
+            https://gepettoweb.laas.fr/doc/stack-of-tasks/pinocchio/topic/doc-v2/doxygen-html/index.html
 
+        """
+        
         self.robModel   = robot.model               # urdf info
         self.robData    = robot.data                # useful functions
         
@@ -40,36 +54,63 @@ class robPin():
             self.viz.display(self.q.flatten().numpy())
                 
     def getMass(self, q:torch.Tensor) -> torch.Tensor:
-        """ Return Mass Matrix """    
+        """Return Mass Matrix
+
+        Args:
+            q (torch.Tensor): joint position variables. 
+        """
+           
         M = torch.from_numpy(pin.crba(self.robModel,self.robData,q.flatten().numpy())).type(self.dtype)
         return M
 
     def getCoriolis(self, q:torch.Tensor, dq:torch.Tensor) -> torch.Tensor:
-        """ Return Coriolis Matrix """    
+        """ Return Coriolis Matrix 
+
+        Args:
+            q (torch.Tensor): joint position variables.
+            dq (torch.Tensor): joint velocity variables. 
+        """
+               
         C = torch.from_numpy(pin.computeCoriolisMatrix(self.robModel,self.robData,q.flatten().numpy(),dq.flatten().numpy())).type(self.dtype)
         return C
 
     def getInvMass(self, q:torch.Tensor) -> torch.Tensor:
-        """ Return Inverse of Mass Matrix """    
+        """ Return Inverse of Mass Matrix  
+
+        Args:
+            q (torch.Tensor): joint position variables.
+        """    
         iM = torch.from_numpy(pin.computeMinverse(self.robModel,self.robData,q.flatten().numpy())).type(self.dtype)
         return iM
 
     def getGravity(self, q:torch.Tensor) -> torch.Tensor:
-        """ Return Generalized Gravity Matrix """    
+        """ Return Generalized Gravity Matrix 
+         
+        Args:
+            q (torch.Tensor): joint position variables.
+        """    
         G = torch.from_numpy(pin.computeGeneralizedGravity(self.robModel,self.robData,q.flatten().numpy())).type(self.dtype).view(-1,1)
         return G
     
     def getDamping(self):
-        
+        """ Return Damping Matrix """
         d_vec = self.robModel.damping
         D = torch.diag(torch.from_numpy(d_vec)).type(self.dtype)
         
         return D
     
-    def getInvDyn(self, state:torch.Tensor, action:torch.Tensor=None) -> torch.Tensor:
-        """
+    def getForwDyn(self, state:torch.Tensor, action:torch.Tensor=None, dampFlag:bool=False) -> torch.Tensor:
+        """ 
+        Get forward dynamic (dot state) of the system given current state and action.
+        Compute all necessary matrices from state.
+        
+        Args:
+            state (torch.Tensor): [q,dq] column vector
+            action (torch.Tensor, optional): action to system. Defaults to None, action is set to zero.
+            dampFlag (bool, optional): boolean to use damping in dynamics. Defaults to False.
+
         Returns:
-            torch.Tensor: get dot state as vector column [dq,ddq]
+            torch.Tensor: dot state as vector column [dq,ddq]^T
         """
         if action is None:
             action = torch.zeros(self.dq.shape()).type(self.dtype)
@@ -82,16 +123,28 @@ class robPin():
         iM  = self.getInvMass(q)
         C   = self.getCoriolis(q,dq)
         G   = self.getGravity(q)
-        D   = self.getDamping()
         
-        ddq = torch.matmul(iM, torch.matmul(-C-D*0,dq) - G + action)
+        if dampFlag:
+            D   = self.getDamping()
+            C = C+D
+        
+        ddq = torch.matmul(iM, torch.matmul(-C,dq) - G + action)
         
         return torch.cat([dq, ddq],dim=0)
     
-    def getDyn(self, q:torch.Tensor,dq:torch.Tensor,ddq:torch.Tensor) -> torch.Tensor:
-        """
+    def getInvDyn(self, q:torch.Tensor,dq:torch.Tensor,ddq:torch.Tensor,dampFlag:bool=False) -> torch.Tensor:
+        """ 
+        Get forward dynamic (dot state) of the system given current state and action.
+        Compute all necessary matrices from state.
+        
+        Args:
+            q (torch.Tensor): joint position variables.
+            dq (torch.Tensor): joint velocity variables.
+            ddq (torch.Tensor): joint acceleration variables.
+            dampFlag (bool, optional): boolean to use damping in dynamics. Defaults to False.
+
         Returns:
-            torch.Tensor: get dot state as vector column [dq,ddq]
+            torch.Tensor: dot state as vector column [dq,ddq]^T
         """
         q = q.type(self.dtype)
         dq = dq.type(self.dtype)
@@ -99,9 +152,12 @@ class robPin():
         M   = self.getMass(q)
         C   = self.getCoriolis(q,dq)
         G   = self.getGravity(q)
-        D   = self.getDamping()
         
-        tau = torch.matmul(M,ddq) + torch.matmul(C+D*0,dq) + G
+        if dampFlag:
+            D   = self.getDamping()
+            C = C+D
+        
+        tau = torch.matmul(M,ddq) + torch.matmul(C,dq) + G
         
         return tau
     
@@ -111,31 +167,30 @@ class robPin():
 
         Args:
             action (torch.Tensor, optional): input to system. If None it is set to zero.
+        Returns:
+            list[torch.Tensor, torch.Tensor]: [self.q, self.dq]
         """
         if dt==None:
             dt = self.dt
         self.action = action
-        self.updateState(dt, action)
+        self.__updateState(dt, action)
         
         return [self.q, self.dq]
     
     def getState(self) -> torch.Tensor:
         """
         Returns:
-            torch.Tensor: get state as vector column [q,dq]
+            torch.Tensor: state as vector column [q,dq]
         """
         return torch.cat([self.q,self.dq],dim=0)
     
     def getDotState(self) -> torch.Tensor:
         """
         Returns:
-            torch.Tensor: get state as vector column [dq,ddq]
+            torch.Tensor: dot state as vector column [dq,ddq]
         """
-        x = self.getState()
-        u = self.action
-        x_dot = self.getInvDyn(x, u)
         
-        return x_dot
+        return torch.cat([self.dq,self.ddq],dim=0)
         
     def setState(self,q:torch.Tensor=None, dq:torch.Tensor=None, ddq:torch.Tensor=None) -> None:
         """
@@ -153,7 +208,7 @@ class robPin():
         if ddq != None:
             self.ddq = ddq.type(self.dtype)
 
-    def updateState(self, dt:float = None, action:torch.Tensor=None) -> None:
+    def __updateState(self, dt:float = None, action:torch.Tensor=None) -> None:
         """
         Update state [q,dq]^T variables wrt robot dynamics.
 
@@ -165,15 +220,15 @@ class robPin():
             dt = self.dt
             
         x       = self.getState()
-        x_new   = self.rk4Step(x, action, dt)
-        #x_new   = self.eulerStep(x, action, dt)
+        x_new   = self.__rk4Step(x, action, dt)
+        #x_new   = self.__eulerStep(x, action, dt)
         
         self.q      = x_new[:self.dim_q]
         self.dq     = x_new[-self.dim_dq:]
-        self.ddq    = self.getInvDyn(x, action)[-self.dim_dq:]
+        self.ddq    = self.getForwDyn(x, action)[-self.dim_dq:]
                  
-    def rk4Step(self, x:torch.Tensor, u:torch.Tensor, dt:float = None) -> torch.Tensor:
-        """Runge Kutta
+    def __rk4Step(self, x:torch.Tensor, u:torch.Tensor, dt:float = None) -> torch.Tensor:
+        """Runge Kutta 4th order.
 
         Args:
             x (torch.Tensor): state column vector [q,dq]
@@ -187,27 +242,16 @@ class robPin():
         if dt==None:
             dt = self.dt
             
-        # dt0 = dt/10
-        # dt_ = dt0
-        # while dt_< dt:
-        #     k1 = self.getInvDyn(x, u)
-        #     k2 = self.getInvDyn(x + k1*dt0/2, u) 
-        #     k3 = self.getInvDyn(x + k2*dt0/2, u)
-        #     k4 = self.getInvDyn(x + k3*dt0, u) 
-            
-        #     x = x + (k1 + (k2 + k3)*2 + k4)* dt0 / 6
-        #     dt_ += dt0
-        
-        k1 = self.getInvDyn(x, u)
-        k2 = self.getInvDyn(x + k1*dt/2, u) 
-        k3 = self.getInvDyn(x + k2*dt/2, u)
-        k4 = self.getInvDyn(x + k3*dt, u) 
+        k1 = self.getForwDyn(x, u)
+        k2 = self.getForwDyn(x + k1*dt/2, u) 
+        k3 = self.getForwDyn(x + k2*dt/2, u)
+        k4 = self.getForwDyn(x + k3*dt, u) 
         
         x_new = x + (k1 + (k2 + k3)*2 + k4)* dt / 6
         
         return x_new 
 
-    def eulerStep(self, x:torch.Tensor, u:torch.Tensor, dt:float = None) -> torch.Tensor:
+    def __eulerStep(self, x:torch.Tensor, u:torch.Tensor, dt:float = None) -> torch.Tensor:
         """Runge Kutta
 
         Args:
@@ -221,34 +265,14 @@ class robPin():
         
         if dt==None:
             dt = self.dt
-        x_dot = self.getInvDyn(x, u)
+        x_dot = self.getForwDyn(x, u)
         
         x_new = x + (x_dot)* dt
         
         return x_new 
 
-    def pinIntegrateStep(self, x:torch.Tensor, u:torch.Tensor, dt:float = None) -> torch.Tensor:
-        """Runge Kutta
-
-        Args:
-            x (torch.Tensor): state column vector [q,dq]
-            u (torch.Tensor): action column vector
-            dt (float): sample time [s]
-
-        Returns:
-            _type_: _description_
-        """
-        
-        if dt==None:
-            dt = self.dt
-        x_dot = self.getInvDyn(x, u)
-        
-        #x_new = x + (x_dot)* dt
-        x_new = pin.integrate(self.robModel,x.flatten().numpy(),x_dot.flatten().numpy())
-        return x_new 
-
     def render(self, dt:float = None) -> None:
-        
+        """ Update visualization. """
         if dt==None:
             dt = self.dt
         self.viz.display(self.q.flatten().numpy())
@@ -272,7 +296,7 @@ if __name__ == '__main__':
     # parameters
     vis_flag = True
     dt = 0.01
-    samples = 2000
+    samples = 200
     
     # load robot
     robot:robWrap = load(ROB_STR)
@@ -303,10 +327,10 @@ if __name__ == '__main__':
         u_new = torch.zeros(bob.dim_dq,1)
         
         # computed torque
-        """ u_new = bob.getDyn(q_new, dq_new, torch.zeros(2,1).type(torch.float64))+ \
-            torch.matmul(torch.diag(torch.tensor([0.1, 0.1])).type(torch.float64),new_e) + \
+        u_new = bob.getInvDyn(q_new, dq_new, torch.zeros(2,1).type(torch.float64))+ \
+            torch.matmul(torch.diag(torch.tensor([0.3, 0.3])).type(torch.float64),new_e) + \
             torch.matmul(torch.diag(torch.tensor([0.05, 0.05])).type(torch.float64),-dq_new)
-         """
+        
         # update state
         q_new, dq_new = bob.getNewState(action=u_new)
         ddq_new = bob.ddq
