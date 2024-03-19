@@ -4,9 +4,8 @@ import subprocess
 from pinocchio.robot_wrapper    import RobotWrapper as robWrap
 from pinocchio.visualize        import MeshcatVisualizer
 from example_robot_data         import load
-import time
 
-class robPin():
+class robPin(object):
 
     def __init__(self, robot:robWrap, dtype:torch.dtype=torch.float64, visual:bool=False, dt:float=0.01) -> None:
         """
@@ -25,7 +24,7 @@ class robPin():
         """
         
         self.robModel   = robot.model               # urdf info
-        self.robData    = robot.data                # useful functions
+        self.robData    = robot.data                # useful functions obtainable for manipulation of urdf data
         
         self.dtype      = dtype
         self.q0         = torch.from_numpy(pin.neutral(self.robModel)).expand(1,-1).T.type(self.dtype)
@@ -52,7 +51,7 @@ class robPin():
             meshcat_url = self.viz.viewer.url()
             subprocess.run(['open', meshcat_url], check=True)
             self.viz.display(self.q.flatten().numpy())
-                
+        
     def getMass(self, q:torch.Tensor) -> torch.Tensor:
         """Return Mass Matrix
 
@@ -99,7 +98,7 @@ class robPin():
         
         return D
     
-    def getForwDyn(self, state:torch.Tensor, action:torch.Tensor=None, dampFlag:bool=False) -> torch.Tensor:
+    def getForwDyn(self, state:torch.Tensor, action:torch.Tensor=None, dampFlag:bool=True) -> torch.Tensor:
         """ 
         Get forward dynamic (dot state) of the system given current state and action.
         Compute all necessary matrices from state.
@@ -113,7 +112,7 @@ class robPin():
             torch.Tensor: dot state as vector column [dq,ddq]^T
         """
         if action is None:
-            action = torch.zeros(self.dq.shape()).type(self.dtype)
+            action = torch.zeros_like(self.dq).type(self.dtype)
         else:
             action = action.type(self.dtype)
             
@@ -126,15 +125,15 @@ class robPin():
         
         if dampFlag:
             D   = self.getDamping()
-            C = C+D
+            C   = C+D
         
         ddq = torch.matmul(iM, torch.matmul(-C,dq) - G + action)
         
         return torch.cat([dq, ddq],dim=0)
     
-    def getInvDyn(self, q:torch.Tensor,dq:torch.Tensor,ddq:torch.Tensor,dampFlag:bool=False) -> torch.Tensor:
+    def getInvDyn(self, q:torch.Tensor,dq:torch.Tensor,ddq:torch.Tensor,dampFlag:bool=True) -> torch.Tensor:
         """ 
-        Get forward dynamic (dot state) of the system given current state and action.
+        Get inverse dynamic (tau) of the system given current state and action.
         Compute all necessary matrices from state.
         
         Args:
@@ -144,10 +143,10 @@ class robPin():
             dampFlag (bool, optional): boolean to use damping in dynamics. Defaults to False.
 
         Returns:
-            torch.Tensor: dot state as vector column [dq,ddq]^T
+            torch.Tensor: tau as vector column
         """
-        q = q.type(self.dtype)
-        dq = dq.type(self.dtype)
+        q   = q.type(self.dtype)
+        dq  = dq.type(self.dtype)
         ddq = ddq.type(self.dtype)
         M   = self.getMass(q)
         C   = self.getCoriolis(q,dq)
@@ -160,7 +159,22 @@ class robPin():
         tau = torch.matmul(M,ddq) + torch.matmul(C,dq) + G
         
         return tau
+
+    def getState(self) -> torch.Tensor:
+        """
+        Returns:
+            torch.Tensor: state as vector column [q,dq]
+        """
+        return torch.cat([self.q,self.dq],dim=0)
     
+    def getDotState(self) -> torch.Tensor:
+        """
+        Returns:
+            torch.Tensor: dot state as vector column [dq,ddq]
+        """
+        
+        return torch.cat([self.dq,self.ddq],dim=0)
+        
     def getNewState(self, dt:float = None, action:torch.Tensor=None) -> list[torch.Tensor, torch.Tensor]:
         """
         Update state [q,dq]^T variables wrt robot dynamics.
@@ -177,21 +191,6 @@ class robPin():
         
         return [self.q, self.dq]
     
-    def getState(self) -> torch.Tensor:
-        """
-        Returns:
-            torch.Tensor: state as vector column [q,dq]
-        """
-        return torch.cat([self.q,self.dq],dim=0)
-    
-    def getDotState(self) -> torch.Tensor:
-        """
-        Returns:
-            torch.Tensor: dot state as vector column [dq,ddq]
-        """
-        
-        return torch.cat([self.dq,self.ddq],dim=0)
-        
     def setState(self,q:torch.Tensor=None, dq:torch.Tensor=None, ddq:torch.Tensor=None) -> None:
         """
         Update only not None input of function.
@@ -292,16 +291,19 @@ ROB_STR = 'double_pendulum'
 
 
 if __name__ == '__main__':
+
+# parameters
+    vis_flag    = True
+    dt          = 0.01
+    samples     = 200
     
     # parameters
-    vis_flag = True
-    dt = 0.01
-    samples = 200
-    
-    # load robot
-    robot:robWrap = load(ROB_STR)
-    bob = robPin(robot, visual=vis_flag, dt = dt)
-    
+    vis_flag    = False
+    dt          = 0.01
+    time_sim    = 5         # time [s]
+    dtype       = torch.float64
+    samples     = torch.floor(torch.tensor(time_sim/dt)).type(torch.int64)
+
     # logging for plot
     e_list      = []
     u_list      = []
@@ -309,28 +311,41 @@ if __name__ == '__main__':
     dq_list     = []
     ddq_list    = []
     
-    # init
-    q_new  = bob.q0 + torch.tensor([[torch.pi+torch.pi/3,0]]).T
-    dq_new = bob.dq0
-    bob.setState(q=q_new, dq=dq_new)
     
+    # load robot
+    robot:robWrap = load(ROB_STR)
+    bob = robPin(robot, visual=vis_flag, dt = dt, dtype=dtype)
+    
+    # init
+    q_0     = bob.q0 + torch.tensor([[torch.pi+torch.pi/3,0]], dtype=dtype).T
+    dq_0    = torch.zeros((2,1), dtype=dtype)
+    ddq_0   = torch.zeros((2,1), dtype=dtype)
+    bob.setState(q=q_0, dq=dq_0, ddq=ddq_0)
+    
+    # render
     if vis_flag:
         bob.render()
     
     # reference and init error
-    ref = torch.tensor([[torch.pi/3,-torch.pi/3]]).T.expand(-1,samples)
-    new_e=torch.zeros(2,1).type(torch.float64)
+    ref     = torch.tensor([[torch.pi/3,-torch.pi/3]], dtype=dtype).T.expand(-1,samples)
+    new_e   = torch.zeros((2,1), dtype=dtype)
+    
+    q_new = q_0
+    dq_new = dq_0
+    ddq_new = ddq_0
+    kp = 0.3
+    kv = 0.05
     
     for k in range(samples):
         
         # set to zero for free response
-        u_new = torch.zeros(bob.dim_dq,1)
+        # u_new = torch.zeros((bob.dim_dq,1), dtype=dtype)
         
         # computed torque
-        u_new = bob.getInvDyn(q_new, dq_new, torch.zeros(2,1).type(torch.float64))+ \
-            torch.matmul(torch.diag(torch.tensor([0.3, 0.3])).type(torch.float64),new_e) + \
-            torch.matmul(torch.diag(torch.tensor([0.05, 0.05])).type(torch.float64),-dq_new)
-        
+        u_new = bob.getInvDyn(q_new, dq_new, torch.zeros(2,1))+ \
+            torch.matmul(torch.diag(torch.tensor([kp, kp])).type(dtype),new_e) + \
+            torch.matmul(torch.diag(torch.tensor([kv, kv])).type(dtype),-dq_new)
+                
         # update state
         q_new, dq_new = bob.getNewState(action=u_new)
         ddq_new = bob.ddq

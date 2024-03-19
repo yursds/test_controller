@@ -1,10 +1,11 @@
 import torch
 from tensordict     import TensorDict
 
+
+
 SCALE_Q = 1
-SCALE_L = 0.1
-
-
+SCALE_L = 0.5
+    
 # ============================================================== #
 # TO DO
 # define a Q and L to satisfy error convergence to zero.
@@ -14,6 +15,7 @@ class ctrlILC():
     """ 
     This class implements a model free ILC action ONLY for square MIMO.
     """
+        
     
     def __init__(self, dimU:int, dimE:int, dimSamples:int, Q:torch.Tensor=None, L:torch.Tensor=None) -> None:
         """ 
@@ -45,7 +47,7 @@ class ctrlILC():
             self.Q:torch.Tensor = Q.type(torch.float64)
         else:
             #self.Q = (torch.tril(torch.ones(dimSamples,dimSamples))*SCALE_Q).expand(dimU, -1, -1)
-            self.Q = (torch.eye(dimSamples)*SCALE_Q).expand(dimU, -1, -1).type(torch.float64)
+            self.Q = (torch.eye(dimSamples)*1).expand(dimU, -1, -1).type(torch.float64)
         if L is not None:
             if not isinstance(L, torch.Tensor):
                     raise TypeError("L must be a torch.Tensor")
@@ -55,7 +57,7 @@ class ctrlILC():
             self.L:torch.Tensor = L.type(torch.float64)
         else:
             #self.L = (torch.tril(torch.ones(dimSamples,dimSamples))*SCALE_L).expand(dimE, -1, -1).type(torch.float64)
-            self.L = (torch.eye(dimSamples)*SCALE_L).expand(dimU, -1, -1).type(torch.float64)
+            self.L = (torch.eye(dimSamples)*0.51).expand(dimU, -1, -1).type(torch.float64)
         
         # data memory template (of error and input) stacked in column
         self.__tmplMem = TensorDict(
@@ -198,7 +200,7 @@ if __name__ == '__main__':
             new_u = conILC.getControl()         # get ILC control
             conILC.updateMemInput(new_u)        # save input for next episode (consider all inputs)
             
-            out = new_u/2                       # simulate robot (simple function)
+            out = new_u/2-torch.sin(new_u)                       # simulate robot (simple function)
             
             new_e = ref[:, k:k+1]-out           # get new error
             conILC.updateMemError(new_e)        # save new_error
@@ -217,7 +219,7 @@ if __name__ == '__main__':
     plt.figure(figsize=(10, 5))
     plt.plot(last_err)
     plt.title("error")
-    plt.xlabel("iteration")
+    plt.xlabel("episode (step k=5)")
     plt.grid()
     
     print('Complete')

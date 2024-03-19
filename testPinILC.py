@@ -1,195 +1,192 @@
-from controllerILC import ctrlILC
 import torch
-from pinocchio.robot_wrapper    import RobotWrapper as robWrap
-from example_robot_data         import load
-from pinWrapTorch import robPin
-
-
-ROB_STR = 'double_pendulum'
-
-def angle_normalize(x:torch.Tensor):
-    """ angle in range [-pi; pi]"""
-    
-    sx = torch.sin(x)
-    cx = torch.cos(x)
-    x = torch.atan2(sx,cx)
-    return x
-
+from controllerILC import ctrlILC
+from pinDoublePendulum import robDoublePendulum
 
 if __name__ == '__main__':
     
-    robot:robWrap = load(ROB_STR)
-    vis_flag = True
-    dt = 0.01
-    bob = robPin(robot, visual=vis_flag, dt = dt)
+    # parameters
+    vis_flag    = False
+    dt          = 0.01
+    episodes    = 10
+    time_sim    = 5         # time [s]
+    dtype       = torch.float64
+    samples     = torch.floor(torch.tensor(time_sim/dt)).type(torch.int64)
     
-    samples = 1000
+    # load robot
+    bob = robDoublePendulum(visual=vis_flag, dt = dt, dtype=dtype)
+        
+    # init
+    q_0     = bob.q0 + torch.tensor([[torch.pi+torch.pi/3,0]], dtype=dtype).T
+    dq_0    = torch.zeros((2,1), dtype=dtype)
+    ddq_0   = torch.zeros((2,1), dtype=dtype)
+    bob.setState(q=q_0, dq=dq_0, ddq=ddq_0)
+    e_0   = torch.zeros((2,1), dtype=dtype)
     
-    q_mem = []
-    dq_mem = []
-    print(bob.q0)
-    q_new  = bob.q0 + torch.tensor([[torch.pi+torch.pi/10*0,0]]).T.type(torch.float32)
-    
-    #q_new = bob.q0
-    dq_new = bob.dq0.type(torch.float32) #+torch.tensor([[0,0]]).T.type(torch.float32)
-    ddq_new = bob.ddq0.type(torch.float32)
-    #print(bob.q0.flatten())
-    
-    bob.setState(q=q_new, dq=dq_new)
+    # render
     if vis_flag:
         bob.render()
     
-    dimU = q_new.shape[0]
-    dimE = dimU
-    episodes = 10
+    # reference
+    ref     = torch.tensor([[torch.pi/3,-torch.pi/3]], dtype=dtype).T.expand(-1,samples)
+    ref     = bob.angle_normalize(ref)
     
     # definition of reference
-    ref = torch.tensor([[torch.pi/3,-torch.pi/3]]).T.expand(-1,samples)
-    
+    #ref = q_0 + torch.tensor([[i*0.005]*2 for i in range(samples)]).T.type(dtype)
+
     # ILC controller instance
-    conILC = ctrlILC(dimU=dimU,dimE=dimE,dimSamples=samples)
-   
-    new_e = torch.zeros(2,1).type(torch.float32)
-    q_new = angle_normalize(q_new).type(torch.float32)
-  
-    #mem = conILC.getMemory()                      # get memory
-    q_list = []
-    # start ILC iteration   
-    conILC.newEp()
+    conILC = ctrlILC(dimMIMO=2, dimSamples=samples, Le=0.01, Ledot = 0.00, dtype=dtype)
     
+    kp = 0.3
+    kv = 0.05
+    
+    # logging for plot
+    e_list      = []
+    q_list      = []
+    dq_list     = []
+    ddq_list    = []
+    u_list      = []
+    uMB_list    = []
+    uFF_list    = []
+    uFB_list    = []
+    
+    conILC.newEp()
     for ep in range(episodes):
+        
+        bob.setState(q=q_0, dq=dq_0, ddq=ddq_0)
+        e_new  = e_0
+        q_new  = q_0
+        dq_new = dq_0
+        ddq_new = ddq_0
+        kp = kp
+        kv = kv
+        
+        e_tmp      = []
+        q_tmp      = []
+        dq_tmp     = []
+        ddq_tmp    = []
+        u_tmp      = []
+        uMB_tmp    = []
+        uFF_tmp    = []
+        uFB_tmp    = []
+        
         if ep != 0:
             conILC.stepILC()
-        
-        new_e  =torch.zeros(dimE,1).type(torch.float32)
-        q_new  = bob.q0 + torch.tensor([[torch.pi+torch.pi/10*0,0]]).T.type(torch.float32)
-        dq_new = bob.dq0.type(torch.float32)
-        ddq_new = bob.ddq0.type(torch.float32)
-        
-        bob.setState(q=q_new, dq=dq_new, ddq=ddq_new)
-        q_new = angle_normalize(q_new).type(torch.float32)
         
         for k in range(samples):
             
             if ep != 0:
-                new_u = conILC.getControl()*1         # get ILC control
+                #u_ff = torch.matmul(bob.getMass(q_new), conILC.getControl())         # get ILC control
+                uFF = conILC.getControl()         # get ILC control
             else:
-                new_u = torch.zeros(dimU,1).type(torch.float32)
-                
-            u_CT = bob.getDyn(q_new, dq_new, torch.zeros(2,1)).type(torch.float32)+ \
-            torch.matmul(torch.diag(torch.tensor([0.1, 0.1])).type(torch.float32),new_e.type(torch.float32)).type(torch.float32) + \
-            torch.matmul(torch.diag(torch.tensor([0.05, 0.05])).type(torch.float32),-dq_new.type(torch.float32))
-        
-            u = new_u + u_CT
-            conILC.updateMemInput(u-bob.getGravity(q_new))     # save input for next episode (consider all inputs)
+                uFF = torch.zeros(2,1)
             
-            # update state
-            q_new, dq_new = bob.getNewState(action=u)
+            # set to zero for free response
+            # u_new = torch.zeros((bob.dim_dq,1), dtype=dtype)
+            #uMB = bob.getInvDyn(q_new, dq_new, torch.zeros(2,1))*0
+            uMB = bob.getGravity(q_new)
+            
+            uFB = torch.matmul(torch.diag(torch.tensor([kp, kp])).type(dtype),e_new) + \
+                    torch.matmul(torch.diag(torch.tensor([kv, kv])).type(dtype),-dq_new)
+            
+            u_new = uMB+uFB+uFF            # update state
+            u_new = bob.saturateu(u_new)
+            u_delta = u_new-uMB
+            conILC.updateMemInput(u_delta)     # save input for next episode (consider all inputs)
+            
+            q_new, dq_new = bob.getNewState(action=u_new)
             ddq_new = bob.ddq
-            q_new = angle_normalize(q_new)
+            q_new = bob.angle_normalize(q_new)
             bob.setState(q=q_new, dq=dq_new)
-        
+            
             # update output
-            out = q_new             # simulate robot (simple function)
-            new_e = angle_normalize(ref[:, k:k+1]-out)              # get new error
+            out = q_new
+            e_new = bob.angle_normalize(ref[:, k:k+1]-out)
+            conILC.updateMemError(e_new)        # save new_error
             
-            conILC.updateMemError(new_e)        # save new_error
-            
-           
-            q_mem.append(q_new.flatten())
-            
-            if ep == episodes-1:
+            # render
+            if vis_flag:
                 bob.render()
-        mem = conILC.getMemory()    
             
-        q_list.append(q_mem)
+            # update logging
+            e_tmp.append(e_new.flatten())
+            q_tmp.append(q_new.flatten())
+            dq_tmp.append(dq_new.flatten())
+            ddq_tmp.append(ddq_new.flatten())
+            
+            u_tmp.append(u_new.flatten())
+            uMB_tmp.append(uMB.flatten())
+            uFF_tmp.append(uFF.flatten())
+            uFB_tmp.append(uFB.flatten())
         
-    from matplotlib import pyplot as plt
-
-    last_err = []
-    for td in mem:
-        err = td["error"]
-        last_err.append(err[:, -100].T)
-
-    
-    e_list0:torch.Tensor = mem[0]["error"]
-    u_list0 = mem[0]["input"]
-    q_list0 = q_list[0]
-    
-    e_list1:torch.Tensor = mem[1]["error"]
-    u_list1 = mem[1]["input"]
-    q_list1 = q_list[1]
-    
-    e_listL = mem[-1]["error"]
-    u_listL = mem[-1]["input"]
-    q_listL = q_list[-1]
+        mem = conILC.getMemory()
+        
+        e_list.append(e_tmp)
+        q_list.append(q_tmp)
+        dq_list.append(dq_tmp)
+        ddq_list.append(ddq_tmp)
+        u_list.append(u_tmp)
+        uMB_list.append(uMB_tmp)
+        uFF_list.append(uFF_tmp)
+        uFB_list.append(uFB_tmp) 
+            
+        from matplotlib import pyplot as plt
     
     plt.ion()
 
-    plt.figure(figsize=(10, 5))
-    plt.plot(last_err)
-    plt.title("error iteration")
-    plt.xlabel("steps")
-    plt.grid()
+    for i in range(episodes):
+        plt.figure(figsize=(10, 5))
+        
+        plt.subplot(4, 1, 1)
+        plt.plot(u_list[i])
+        plt.title("u")
+        plt.xlabel("steps")
+        plt.grid()
+        
+        plt.subplot(4, 1, 2)
+        plt.plot(uMB_list[i])
+        plt.title("uMB")
+        plt.xlabel("steps")
+        plt.grid()
+        
+        plt.subplot(4, 1, 3)
+        plt.plot(uFF_list[i])
+        plt.title("uFF")
+        plt.xlabel("steps")
+        plt.grid()
+        
+        plt.subplot(4, 1, 4)
+        plt.plot(uFB_list[i])
+        plt.title("uFB")
+        plt.xlabel("steps")
+        plt.grid()
+        
+        plt.suptitle(f"Episode {i+1}")
+    
     
     plt.figure(figsize=(10, 5))
-    plt.subplot(3, 3, 1)
-    plt.plot(e_list0.T)
+    plt.plot(e_list[-1])
     plt.title("error")
     plt.xlabel("steps")
     plt.grid()
     
-    plt.subplot(3, 3, 2)
-    plt.plot(q_list0)
+    plt.figure(figsize=(10, 5))
+    plt.subplot(1, 3, 1)
+    plt.plot(q_list[-1])
     plt.title("q")
     plt.xlabel("steps")
     plt.grid()
     
-    plt.subplot(3, 3, 3)
-    plt.plot(u_list0.T)
-    plt.title("u")
+    plt.subplot(1, 3, 2)
+    plt.plot(dq_list[-1])
+    plt.title("dq")
     plt.xlabel("steps")
     plt.grid()
     
-    plt.subplot(3, 3, 4)
-    plt.plot(e_list1.T)
-    plt.title("error")
+    plt.subplot(1, 3, 3)
+    plt.plot(ddq_list[-1])
+    plt.title("ddq")
     plt.xlabel("steps")
     plt.grid()
     
-    plt.subplot(3, 3, 5)
-    plt.plot(q_list1)
-    plt.title("q")
-    plt.xlabel("steps")
-    plt.grid()
-    
-    plt.subplot(3, 3, 6)
-    plt.plot(u_list1.T)
-    plt.title("u")
-    plt.xlabel("steps")
-    plt.grid()
-    
-    plt.subplot(3, 3, 7)
-    plt.plot(e_listL.T)
-    plt.title("error")
-    plt.xlabel("steps")
-    plt.grid()
-    
-    plt.subplot(3, 3, 8)
-    plt.plot(q_listL)
-    plt.title("q")
-    plt.xlabel("steps")
-    plt.grid()
-    
-    plt.subplot(3, 3, 9)
-    plt.plot(u_listL.T)
-    plt.title("u")
-    plt.xlabel("steps")
-    plt.grid()
-    
-    print('Complete')
     plt.ioff()
     plt.show()
-    
-    print("finish")
-    

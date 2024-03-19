@@ -1,11 +1,6 @@
 import torch
 from tensordict     import TensorDict
 
-
-
-SCALE_Q = 1
-SCALE_L = 0.5
-    
 # ============================================================== #
 # TO DO
 # define a Q and L to satisfy error convergence to zero.
@@ -17,47 +12,26 @@ class ctrlILC():
     """
         
     
-    def __init__(self, dimU:int, dimE:int, dimSamples:int, Q:torch.Tensor=None, L:torch.Tensor=None) -> None:
+    def __init__(self, dimMIMO:int, dimSamples:int, Q:float=1.0, Le:float=0.5, Ledot:float=0.5, dtype=torch.float64) -> None:
         """ 
         Args:
-            dimU (int): dimension of input vector (single step).
-            dimE (int): dimention of error vector (single step).
+            dimMIMO (int): dimension of input vector (single step).
             dimSamples (int[optional]): number of samples in a single episode.
             Q (torch.Tensor[optional]): Q-filter matrix (square matrix).
             L (torch.Tensor[optional]): learning gain matrix (square matrix).
         """
         
-        # Check        
-        if dimU != dimE:
-            raise TypeError("ILC class implemented only for square MIMO.")      
+        self.dtype      = dtype
+        self.Q          = Q
+        self.Le         = Le
+        self.Lde        = Ledot
+        self.dimMIMO    = dimMIMO
         
-        self.uEp    = torch.zeros(dimU,dimSamples).type(torch.float64) # control inputs for current episode
-        self.uk     = torch.zeros(dimU,1).type(torch.float64)          # current control input
-        self.ek     = torch.zeros(dimE,1).type(torch.float64)          # current error
-        self.idx    = 0                                                # idx step
-        self.mem    = []                                                # list of episode's memory
-        
-        # Init optionals variables # ADD Q depth check or expand it
-        if Q is not None:
-            if not isinstance(Q, torch.Tensor):
-                raise TypeError("Q must be a torch.Tensor")
-            rows, cols = Q.size()
-            if rows != cols:
-                raise ValueError("Q must be a square matrix")
-            self.Q:torch.Tensor = Q.type(torch.float64)
-        else:
-            #self.Q = (torch.tril(torch.ones(dimSamples,dimSamples))*SCALE_Q).expand(dimU, -1, -1)
-            self.Q = (torch.eye(dimSamples)*1).expand(dimU, -1, -1).type(torch.float64)
-        if L is not None:
-            if not isinstance(L, torch.Tensor):
-                    raise TypeError("L must be a torch.Tensor")
-            rows, cols = L.size()
-            if rows != cols:
-                raise ValueError("L must be a square matrix")
-            self.L:torch.Tensor = L.type(torch.float64)
-        else:
-            #self.L = (torch.tril(torch.ones(dimSamples,dimSamples))*SCALE_L).expand(dimE, -1, -1).type(torch.float64)
-            self.L = (torch.eye(dimSamples)*0.51).expand(dimU, -1, -1).type(torch.float64)
+        self.uEp        = torch.zeros(dimMIMO,dimSamples).type(self.dtype)  # control inputs for current episode
+        self.uk         = torch.zeros(dimMIMO,1).type(self.dtype)              # current control input
+        self.ek         = torch.zeros(dimMIMO,1).type(self.dtype)              # current error
+        self.idx        = 0                                                 # idx step
+        self.mem        = []                                                # list of episode's memory
         
         # data memory template (of error and input) stacked in column
         self.__tmplMem = TensorDict(
@@ -76,9 +50,11 @@ class ctrlILC():
             raise TypeError("data must be a torch.Tensor")
         if data.size()[1] != 1:
             raise ("data must be a column vector")
+        
         # use newest tensordict
         tmp_mem:torch.Tensor = self.mem[-1][dict]
-        tmp_mem = torch.cat([tmp_mem.clone(),data.type(torch.float64)],dim=1)      # stack in column
+        tmp_mem = torch.cat([tmp_mem.clone(), data.type(self.dtype)],dim=1)      # stack in column
+        
         # update mem
         self.mem[-1][dict] = tmp_mem
            
@@ -105,38 +81,40 @@ class ctrlILC():
         self.mem.append(self.__tmplMem.clone())
         self.idx = 0
            
-    def updateQ(self, newQ:torch.Tensor) -> None:
+    def updateLe(self, newLe:torch.Tensor) -> None:
         """ Update Q tensor """
-        self.Q = newQ(torch.float64)
+        self.Le = newLe.type(self.dtype)
     
-    def updateL(self, newL:torch.Tensor) -> None:
+    def updateLedot(self, newLedot:torch.Tensor) -> None:
         """ Update L tensor """
-        self.L = newL.type(torch.float64)
+        self.Lde = newLedot.type(self.dtype)
 
     def stepILC(self) -> None:
         """
-        Start a new episode of ILC.
-        Update control for to use in this episode.
+        Update control to use in this episode.
+        Start new episode.
         """
         
         if len(self.mem) == 0:
             raise("ILC first episode is not initialized")
         
-        self.newEp()
-        
         Q   = self.Q
-        L   = self.L
+        Le  = self.Le
+        Lde = self.Lde
         
-        u_old:torch.Tensor  = self.mem[-2]["input"]
-        e_old:torch.Tensor  = self.mem[-2]["error"]
-        
+        u_old:torch.Tensor  = self.mem[-1]["input"]
+        e_old:torch.Tensor  = self.mem[-1]["error"]
+        tmp0 = torch.tensor([[0.0]]).expand(self.dimMIMO,-1).type(self.dtype)
+        de_old = torch.cat([tmp0,torch.diff(e_old, dim=1)],dim=1)
         #aaa = torch.einsum('dij,dj->di',L,e_old)
         #a = torch.mm(L[0,:,:].squeeze(),e_old[0:1,:].t())
         #print(aaa)
         #print(a.t())
-        u_new = torch.einsum('dij,dj->di',Q,(u_old+torch.einsum('dij,dj->di',L,e_old)))
+        
+        u_new = Q*u_old+Le*e_old+Lde*de_old
         
         self.uEp = u_new
+        self.newEp() 
                           
     def resetAll(self) -> None:
         """
@@ -159,7 +137,7 @@ class ctrlILC():
                  
     def firstEpLazy(self, ref:torch.Tensor) -> None:
         """ 
-        Init step 0 of ILC: no input and save  reference as error. 
+        Init step 0 of ILC: no input and save reference as error. 
         Reference is stacked in rows.
         """
         self.updateMemError(ref)
@@ -168,18 +146,17 @@ class ctrlILC():
 
 if __name__ == '__main__':
     
-    dimU = 5
-    dimE = dimU
+    dim = 5
     samples = 10
     episodes = 50
     
     # definition of reference
-    ref = torch.tensor([[i]*dimE for i in range(samples)]).t()
+    ref = torch.tensor([[i]*dim for i in range(samples)]).t()
     for h in range(ref.size()[0]):
         ref[h,:] = ref[h,:]*(h+1)
     
     # ILC controller instance
-    conILC = ctrlILC(dimU=dimU,dimE=dimE,dimSamples=samples)     
+    conILC = ctrlILC(dimMIMO=dim,dimSamples=samples)     
    
     # initialization of ILC memory
     conILC.newEp()                              # start new episode
@@ -194,7 +171,7 @@ if __name__ == '__main__':
     for _ in range(episodes):
         
         conILC.stepILC()                        # update control
-        
+    
         for k in range(samples):
             
             new_u = conILC.getControl()         # get ILC control
@@ -212,7 +189,7 @@ if __name__ == '__main__':
     last_err = []
     for td in mem:
         err = td["error"]
-        last_err.append(err[:, -5])
+        last_err.append(err[:, -1])
     
     plt.ion()
 
