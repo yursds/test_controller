@@ -22,7 +22,7 @@ if __name__ == '__main__':
     # parameters
     vis_flag    = False
     dtype       = torch.float64
-    episodes    = 5
+    episodes    = 30
     time_sim    = 10            # time [s]
     dt          = 0.01          # sample time [s]
     samples     = torch.floor(torch.tensor(time_sim/dt)).type(torch.int64)
@@ -111,7 +111,7 @@ if __name__ == '__main__':
             
             # total control
             d = torch.tensor([[0,0.01*torch.sin(torch.tensor(0.1*k))]],dtype=dtype).T
-            u_new = uMB+uFB+uFF+d
+            u_new = uMB+uFB+uFF+d*0
             u_new = bob.saturateu(u_new)
             
             # what learn ILC

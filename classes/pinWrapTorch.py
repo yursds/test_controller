@@ -293,7 +293,7 @@ ROB_STR = 'double_pendulum'
 if __name__ == '__main__':
     
     # parameters
-    vis_flag    = False
+    vis_flag    = True
     dt          = 0.01
     time_sim    = 5         # time [s]
     dtype       = torch.float64

@@ -43,7 +43,7 @@ if __name__ == '__main__':
     # ILC controller instance
     Le0         = 0.02
     Lde0        = 0.02
-    conILC = ILCMBctrl(dimMIMO=bob.dim_q, dimSamples=samples, Le=Le0, Ledot=Lde0, dtype=dtype)
+    conILC      = ILCMBctrl(dimMIMO=bob.dim_q, dimSamples=samples, Le=Le0, Ledot=Lde0, dtype=dtype)
 
     # feedback parameters
     kp = 0.3/10

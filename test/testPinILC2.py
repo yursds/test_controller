@@ -1,4 +1,4 @@
-#--------------------------------------------------------------------------------------------#
+#-----------------------------------------------------------------------------------------------#
 # TEST controllerILC
 #
 # NOTE the control of ILC used is:
@@ -10,7 +10,7 @@
 # error (and dot error) used in ILC is not "decoupled", so in u_ILC_coupled M*learning_gain*e 
 # is obtained, the ipdating of input of ILC has strongly not linear law.
 # coupling and decoupling is done with different matrix due to different episodes.
-#---------------------------------------------------------------------------------------------#
+#-----------------------------------------------------------------------------------------------#
 
 
 import torch
@@ -23,8 +23,8 @@ if __name__ == '__main__':
     # parameters
     vis_flag    = False
     dtype       = torch.float64
-    episodes    = 30
-    time_sim    = 10            # time [s]
+    episodes    = 50
+    time_sim    = 5            # time [s]
     dt          = 0.01          # sample time [s]
     samples     = torch.floor(torch.tensor(time_sim/dt)).type(torch.int64)
     
@@ -42,9 +42,11 @@ if __name__ == '__main__':
     bob.setState(q=q_0, dq=dq_0, ddq=ddq_0)
         
     # ILC controller instance
-    Le0         = 0.8
-    Lde0        = 0.5
-    conILC = ILCctrl(dimMIMO=bob.dim_q, dimSamples=samples, Le=Le0, Ledot=Lde0, dtype=dtype)
+    Le0     = 0.3
+    Lde0    = 0.3
+    Le      = Le0
+    Lde     = Lde0
+    conILC  = ILCctrl(dimMIMO=bob.dim_q, dimSamples=samples, Le=Le0, Ledot=Lde0, dtype=dtype)
 
     # feedback parameters
     kp = 0.3/10
@@ -60,7 +62,6 @@ if __name__ == '__main__':
     uMB_list    = []
     uFF_list    = []
     uFB_list    = []
-    
     
     # init first episode of ILC
     conILC.newEp()
@@ -88,7 +89,7 @@ if __name__ == '__main__':
         # compute new feedforward control of ILC
         if ep != 0:
             conILC.stepILC()
-        
+        conILC.updateLearningGain(newLe=Le,newLde=Lde)
         # start simulation for a single espisode
         for k in range(samples):
             
