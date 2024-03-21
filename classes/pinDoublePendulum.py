@@ -1,8 +1,7 @@
 import torch
-import pinocchio as pin
 from pinocchio.robot_wrapper    import RobotWrapper as robWrap
 from example_robot_data         import load
-from pinWrapTorch               import robPin
+from classes.pinWrapTorch       import robPin
 
 class robDoublePendulum(robPin):
     
@@ -99,29 +98,7 @@ class robDoublePendulum(robPin):
         tau = self.saturateu(tau)
         
         return tau
-        
-    def getForwDyn2(self, state:torch.Tensor, action:torch.Tensor=None, dampFlag:bool=True) -> torch.Tensor:
-        """ 
-        Get forward dynamic (dot state) of the system given current state and action.
-        Compute all necessary matrices from state.
-        
-        Args:
-            state (torch.Tensor): [q,dq] column vector
-            action (torch.Tensor, optional): action to system. Defaults to None, action is set to zero.
-            dampFlag (bool, optional): boolean to use damping in dynamics. Defaults to False.
-
-        Returns:
-            torch.Tensor: dot state as vector column [dq,ddq]^T
-        """
-            
-        state[-self.dim_q:]  = self.saturatedq(state[-self.dim_q:])
-        
-        x_dot = super().getForwDyn(state, action, dampFlag)
-        
-        x_dot[-self.dim_q:]  = self.saturateddq(x_dot[-self.dim_q:])
-        
-        return x_dot
-   
+  
     def getNewState(self, dt:float = None, action:torch.Tensor=None) -> list[torch.Tensor, torch.Tensor]:
             """
             Update state [q,dq]^T variables wrt robot dynamics.
@@ -164,7 +141,7 @@ if __name__ == '__main__':
     bob = robDoublePendulum(visual=vis_flag, dt = dt, dtype=dtype)
         
     # init
-    q_0     = bob.q0 + torch.tensor([[torch.pi+torch.pi/3,0]], dtype=dtype).T
+    q_0     = bob.q0 + torch.tensor([[torch.pi,0]], dtype=dtype).T
     dq_0    = torch.zeros((2,1), dtype=dtype)
     ddq_0   = torch.zeros((2,1), dtype=dtype)
     bob.setState(q=q_0, dq=dq_0, ddq=ddq_0)
@@ -175,7 +152,7 @@ if __name__ == '__main__':
     dq_new  = dq_0
     ddq_new = ddq_0
     kp      = 0.3
-    kv      = 0.05
+    kv      = 0.08
     
     # reference
     ref     = torch.tensor([[torch.pi/3,-torch.pi/3]], dtype=dtype).T.expand(-1,samples)
@@ -196,7 +173,7 @@ if __name__ == '__main__':
         u_new = bob.getInvDyn(q_new, dq_new, torch.zeros(2,1))+ \
             torch.matmul(torch.diag(torch.tensor([kp, kp])).type(dtype),new_e) + \
             torch.matmul(torch.diag(torch.tensor([kv, kv])).type(dtype),-dq_new)
-            
+        
         # update state
         q_new, dq_new = bob.getNewState(action=u_new)
         ddq_new = bob.ddq

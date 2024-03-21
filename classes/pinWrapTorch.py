@@ -291,11 +291,6 @@ ROB_STR = 'double_pendulum'
 
 
 if __name__ == '__main__':
-
-# parameters
-    vis_flag    = True
-    dt          = 0.01
-    samples     = 200
     
     # parameters
     vis_flag    = False
